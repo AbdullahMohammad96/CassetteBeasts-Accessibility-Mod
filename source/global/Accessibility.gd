@@ -404,7 +404,7 @@ func _get_control_text(control: Control) -> String:
 
 	# Try "text" property (Button, Label, etc)
 	if "text" in control and control.text is String and not control.text.empty():
-		var text = _clean_text(control.text)
+		var text = _clean_text(Loc.tr(control.text))
 		if control.get("disabled"):
 			text += ", disabled"
 		return text
