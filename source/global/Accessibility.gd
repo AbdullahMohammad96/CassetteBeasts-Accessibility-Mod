@@ -24,6 +24,10 @@ var _speech_queue: Array = []
 var _is_dialogue_playing: bool = false
 var _queue_timer: Timer = null
 
+# Debounce system for rapid setting changes (e.g. holding arrow keys on sliders)
+var _setting_debounce_timer: Timer = null
+var _pending_setting_text: String = ""
+
 # Color name mappings for character creation palette ramp indices
 # Based on actual palette.png color ramps in Cassette Beasts
 # Each ramp is a gradient of one base color (5 shades each)
@@ -142,6 +146,13 @@ func _setup_queue_timer() -> void:
 	add_child(_queue_timer)
 	_queue_timer.start()
 
+	# Debounce timer for rapid setting changes
+	_setting_debounce_timer = Timer.new()
+	_setting_debounce_timer.one_shot = true
+	_setting_debounce_timer.wait_time = 0.2
+	_setting_debounce_timer.connect("timeout", self, "_on_setting_debounce_timeout")
+	add_child(_setting_debounce_timer)
+
 func _init_tts() -> void:
 	# Load godot-tts addon
 	var TTS = load("res://addons/godot-tts/TTS.gd")
@@ -168,6 +179,12 @@ func _announce_startup() -> void:
 
 func _input(event: InputEvent) -> void:
 	if not event is InputEventKey or not event.pressed:
+		return
+
+	# Accessibility: Don't intercept hotkeys while the player is typing.
+	# Use get_class() rather than 'is LineEdit' because Godot 3 'is' checks
+	# fail for GDScript subclasses like WidthLimitLineEdit.
+	if _any_text_input_focused():
 		return
 
 	match event.scancode:
@@ -201,6 +218,21 @@ func _input(event: InputEvent) -> void:
 		KEY_F5:
 			_repeat_last()
 			get_tree().set_input_as_handled()
+
+func _any_text_input_focused() -> bool:
+	# Scan entire scene tree for any focused text input node.
+	# get_class() returns the engine class ("LineEdit", "TextEdit") regardless
+	# of what GDScript extends it, so WidthLimitLineEdit is correctly detected.
+	return _scan_tree_for_focused_text(get_tree().root)
+
+func _scan_tree_for_focused_text(node: Node) -> bool:
+	var cls = node.get_class()
+	if (cls == "LineEdit" or cls == "TextEdit") and node.has_focus():
+		return true
+	for child in node.get_children():
+		if _scan_tree_for_focused_text(child):
+			return true
+	return false
 
 # === CORE TTS ===
 
@@ -306,6 +338,30 @@ func announce_menu(menu_name: String) -> void:
 		return
 	speak(menu_name + " menu", true)
 
+func announce_setting_changed(control: Control) -> void:
+	if not enabled or control == null:
+		return
+	var field_name = _get_field_label(control)
+	var value_text = ""
+	if control.has_method("get_value_label") and "selected_index" in control:
+		value_text = _clean_text(control.get_value_label(control.selected_index))
+	elif "value_label" in control and control.value_label:
+		value_text = _clean_text(_translate_label(control.value_label.text))
+	elif "selected_value" in control:
+		value_text = str(control.selected_value)
+	if value_text.empty():
+		value_text = "unknown"
+	var text = value_text if field_name.empty() else field_name + ", " + value_text
+	# Debounce: if changes arrive rapidly, only speak the last one
+	_pending_setting_text = text
+	_setting_debounce_timer.stop()
+	_setting_debounce_timer.start()
+
+func _on_setting_debounce_timeout() -> void:
+	if not _pending_setting_text.empty():
+		speak(_pending_setting_text, true)
+		_pending_setting_text = ""
+
 func announce_list_item(item: String, index: int, total: int, color_index: int = -1) -> void:
 	if not enabled:
 		return
@@ -382,6 +438,18 @@ func _get_control_text(control: Control) -> String:
 	if control.has_method("get_accessibility_text"):
 		return control.get_accessibility_text()
 
+	# Special handling for ArrowSlider (volume/percent sliders)
+	if "value_label" in control and "selected_value" in control and not control.has_method("get_value_label"):
+		var field_name = _get_field_label(control)
+		var value_text = ""
+		if control.value_label:
+			value_text = _clean_text(_translate_label(control.value_label.text))
+		if value_text.empty():
+			value_text = str(control.selected_value)
+		if field_name.empty():
+			return value_text
+		return field_name + ", " + value_text
+
 	# Special handling for ArrowOptionList (character creation, settings)
 	if control.has_method("get_value_label") and "selected_index" in control:
 		var field_name = _get_field_label(control)
@@ -426,16 +494,62 @@ func _get_field_label(control: Control) -> String:
 	if parent == null:
 		return ""
 
+	# Check previous sibling at current level
 	var my_index = control.get_index()
 	if my_index > 0:
 		var prev_sibling = parent.get_child(my_index - 1)
 		if prev_sibling is Label:
-			return _clean_text(prev_sibling.text)
+			var label_text = _translate_label(prev_sibling.text)
+			if not label_text.empty():
+				return _clean_text(label_text)
+
+	# Walk up one level and check for a Label sibling of the parent
+	# (handles cases where slider is nested inside a row container)
+	var grandparent = parent.get_parent()
+	if grandparent != null:
+		var parent_index = parent.get_index()
+		if parent_index > 0:
+			var prev_uncle = grandparent.get_child(parent_index - 1)
+			if prev_uncle is Label:
+				var label_text = _translate_label(prev_uncle.text)
+				if not label_text.empty():
+					return _clean_text(label_text)
+		# Also check for a Label child inside the parent row
+		for sibling in parent.get_children():
+			if sibling is Label and sibling != control:
+				var label_text = _translate_label(sibling.text)
+				if not label_text.empty():
+					return _clean_text(label_text)
 
 	var ctrl_name = control.name
 	if ctrl_name.begins_with("Field_"):
 		ctrl_name = ctrl_name.substr(6)
 	return ctrl_name.replace("_", " ").capitalize()
+
+# Translate a label string, trying Loc.tr() first then tr(), and cleaning up
+# raw translation keys like "UI_SETTINGS_AI_SMARTNESS" if both fail
+func _translate_label(text: String) -> String:
+	if text.empty():
+		return ""
+	# Try Loc.tr() first
+	var translated = Loc.tr(text)
+	if translated != text:
+		return translated
+	# Fall back to Godot's built-in tr()
+	translated = tr(text)
+	if translated != text:
+		return translated
+	# If still untranslated (looks like a key e.g. "UI_SETTINGS_AI_SMARTNESS"),
+	# convert the key itself to a readable name
+	if "_" in text and text == text.to_upper():
+		# Strip common prefixes
+		var key = text
+		for prefix in ["UI_SETTINGS_", "UI_", "SETTINGS_"]:
+			if key.begins_with(prefix):
+				key = key.substr(prefix.length())
+				break
+		return key.replace("_", " ").capitalize()
+	return text
 
 func _node_name_to_text(node_name: String) -> String:
 	node_name = node_name.replace("_", " ")

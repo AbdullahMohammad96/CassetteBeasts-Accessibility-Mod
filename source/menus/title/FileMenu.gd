@@ -61,24 +61,24 @@ func _ready():
 		call_deferred("_announce_file_menu_open")
 
 func _announce_file_menu_open() -> void:
-	if Accessibility:
-		Accessibility.announce_menu("Select save file")
-	# Announce Play/Erase/Back button focus
+	# Accessibility: No menu announcement here — the first FileButton focus_entered
+	# already announces the save slot, so announcing the menu name on top would
+	# interrupt it. Connecting button signals is still needed.
 	play_button.connect("focus_entered", self, "_on_play_button_focused")
 	erase_button.connect("focus_entered", self, "_on_erase_button_focused")
 	back_button.connect("focus_entered", self, "_on_back_button_focused")
 
 func _on_play_button_focused() -> void:
 	if Accessibility:
-		Accessibility.announce_focus(play_button)
+		Accessibility.speak(Loc.tr(play_button.text), true)
 
 func _on_erase_button_focused() -> void:
 	if Accessibility:
-		Accessibility.speak("Erase save file", true)
+		Accessibility.speak(Loc.tr("UI_LOAD_FILE_ERASE"), true)
 
 func _on_back_button_focused() -> void:
 	if Accessibility:
-		Accessibility.speak("Back", true)
+		Accessibility.speak(Loc.tr("UI_BUTTON_BACK"), true)
 
 func cancel():
 	if Net.has_pending_invite():

@@ -80,16 +80,6 @@ func set_text(value: String):
 		if "{control." in translation:
 			translation = translation.format(InputIcons.get_action_bbcodes(font_height))
 		label.parse_bbcode(translation)
-		# Accessibility: Announce dialogue text (defer to ensure visibility is set)
-		# Use call_deferred to announce after the show() call completes
-		if Accessibility:
-			call_deferred("_announce_dialogue_deferred", translation)
-
-func _announce_dialogue_deferred(translation: String) -> void:
-	# Only announce if the dialog is now visible
-	if visible and Accessibility:
-		var speaker_name = Loc.tr(title) if title != "" else ""
-		Accessibility.announce_dialogue(speaker_name, translation)
 
 func set_title(value: String):
 	title = value
@@ -121,15 +111,11 @@ func show():
 	label.stop()
 	label.reset()
 	label.start()
-
-	# Accessibility: Mark dialogue as playing
-	if Accessibility:
-		Accessibility.set_dialogue_playing(true)
-
+	
 	if audio:
 		audio_stream_player.stream = audio
 		audio_stream_player.play()
-
+	
 	yield(Co.join([slider.show(), _fade_portrait(1.0)]), "completed")
 
 func show_message(message: String, close_after: bool = true, wait_for_confirm: bool = true):
@@ -138,6 +124,10 @@ func show_message(message: String, close_after: bool = true, wait_for_confirm: b
 	self.wait_for_confirm = wait_for_confirm
 	next_arrow.visible = false
 	yield(show(), "completed")
+	if Accessibility:
+		var speaker = Loc.tr(title) if title != "" else ""
+		var msg_text = Loc.tr(message)
+		Accessibility.announce_dialogue(speaker, msg_text)
 	if wait_for_confirm and not finished:
 		yield(self, "finished")
 	elif not label.finished:
@@ -186,11 +176,6 @@ func _input(event: InputEvent):
 func _on_Label_typed_out():
 	next_arrow.visible = wait_for_confirm
 	emit_signal("typed_out")
-
-	# Accessibility: Mark dialogue as finished typing so queued speech can play
-	if Accessibility:
-		Accessibility.set_dialogue_playing(false)
-
 	if Input.is_action_pressed("fast_mode") and UserSettings.show_timer:
 		if cancelable:
 			hide()

@@ -35,6 +35,13 @@ func _ready():
 func _on_focus_entered_tts() -> void:
 	if not Accessibility:
 		return
+	# Accessibility: Defer by one frame so any ongoing speech from the title menu
+	# button finishes naturally before this interrupts with the slot announcement
+	call_deferred("_announce_slot")
+
+func _announce_slot() -> void:
+	if not Accessibility:
+		return
 	var slot_name = file_path.get_file().get_basename().replace("file", "Save slot ")
 	match state:
 		State.LOADING:

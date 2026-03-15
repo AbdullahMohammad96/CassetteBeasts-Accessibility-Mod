@@ -15,8 +15,6 @@ var t: float = 0.0
 func _ready():
 	set_options(options)
 	set_process(false)
-	# Accessibility: Connect visibility change for TTS
-	connect("visibility_changed", self, "_on_visibility_changed_accessibility")
 
 func set_valign_center(value: bool):
 	valign_center = value
@@ -35,11 +33,15 @@ func set_options(value: Array):
 			button.set_bbcode("[center]{0}[/center]".format([tr(option)]))
 			buttons.add_child(button)
 			button.connect("pressed", self, "_button_pressed", [i])
-			# Accessibility: Connect focus signal for individual option announcements
-			if button.has_signal("focus_entered"):
-				button.connect("focus_entered", self, "_on_button_focus_entered_accessibility", [i])
+			button.connect("focus_entered", self, "_on_button_focused", [i])
 		buttons.setup_focus()
 		set_initial_index(initial_index)
+
+func _on_button_focused(index: int) -> void:
+	if Accessibility and index >= 0 and index < options.size():
+		var option_text = Accessibility._clean_text(tr(options[index]))
+		var position = str(index + 1) + " of " + str(options.size())
+		Accessibility.speak(option_text + ", " + position, false)
 
 func set_initial_index(value: int):
 	initial_index = value
@@ -58,6 +60,17 @@ func grab_focus():
 	if visible:
 		t = 0.0
 		set_process(true)
+		if Accessibility:
+			call_deferred("_announce_options")
+
+func _announce_options() -> void:
+	if Accessibility and options.size() > 0:
+		var announcement = "Choose: "
+		for i in range(options.size()):
+			if i > 0:
+				announcement += ", "
+			announcement += str(i + 1) + ") " + Accessibility._clean_text(tr(options[i]))
+		Accessibility.speak_queued(announcement)
 
 func _button_pressed(option_index):
 	set_process(false)
@@ -80,51 +93,3 @@ func cancel():
 		emit_signal("option_chosen", default_index)
 	else:
 		emit_signal("option_chosen", 0)
-
-func _on_visibility_changed_accessibility():
-	if not visible:
-		return
-
-	# Announce dialogue options when menu becomes visible
-	call_deferred("_announce_options_deferred")
-
-func _announce_options_deferred():
-	if not Accessibility or options.size() == 0:
-		return
-
-	# Build announcement of all options
-	var announcement = ""
-	for i in range(options.size()):
-		var option_text = tr(options[i])
-		# Clean BBCode and placeholders
-		var regex = RegEx.new()
-		regex.compile("\\[.*?\\]")
-		option_text = regex.sub(option_text, "", true)
-		regex.compile("\\{[^}]+\\}")
-		option_text = regex.sub(option_text, "", true)
-		option_text = option_text.strip_edges()
-
-		if option_text != "":
-			if announcement != "":
-				announcement += ", "
-			announcement += str(i + 1) + ") " + option_text
-
-	if announcement != "":
-		# Use queued speech so it waits for dialogue to finish
-		Accessibility.speak_queued("Options: " + announcement)
-
-func _on_button_focus_entered_accessibility(index: int):
-	if not Accessibility or index < 0 or index >= options.size():
-		return
-
-	var option_text = tr(options[index])
-	# Clean BBCode and placeholders
-	var regex = RegEx.new()
-	regex.compile("\\[.*?\\]")
-	option_text = regex.sub(option_text, "", true)
-	regex.compile("\\{[^}]+\\}")
-	option_text = regex.sub(option_text, "", true)
-	option_text = option_text.strip_edges()
-
-	if option_text != "":
-		Accessibility.speak(option_text + ", " + str(index + 1) + " of " + str(options.size()), true)
